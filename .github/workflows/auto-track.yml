@@ -79,15 +79,4 @@ jobs:
         run: |
           gh release create "v${{ steps.target.outputs.target }}" \
             --title "v${{ steps.target.outputs.target }} — tracks droid@${{ steps.target.outputs.target }}" \
-            --notes "Auto-generated to track [droid@${{ steps.target.outputs.target }}](https://www.npmjs.com/package/droid/v/${{ steps.target.outputs.target }}). Patches verified by the CI smoke job. If a release fails the smoke step the bot will skip it and you will see a failed workflow run."
-
-      - name: Publish to npm
-        if: steps.target.outputs.skip != 'true'
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-        run: |
-          if [ -z "$NODE_AUTH_TOKEN" ]; then
-            echo "::warning::NPM_TOKEN secret not set — skipping npm publish. GitHub release was tagged; users can install from git/tarball."
-            exit 0
-          fi
-          npm publish --access public --provenance
+            --notes "Auto-generated to track [droid@${{ steps.target.outputs.target }}](https://www.npmjs.com/package/droid/v/${{ steps.target.outputs.target }}). Patches verified by the CI smoke job. Publish to npm is handled by .github/workflows/publish.yml (OIDC Trusted Publisher)."
