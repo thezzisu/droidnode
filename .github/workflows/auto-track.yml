@@ -1,0 +1,93 @@
+name: Auto-track droid releases
+
+on:
+  schedule:
+    # Daily at 03:17 UTC. Off-the-hour to spread npm registry load.
+    - cron: '17 3 * * *'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Force a specific droid version (defaults to npm latest)
+        required: false
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  bump:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          registry-url: 'https://registry.npmjs.org'
+
+      - name: Resolve target droid version
+        id: target
+        run: |
+          if [ -n "${{ inputs.version }}" ]; then
+            TARGET="${{ inputs.version }}"
+          else
+            TARGET=$(npm view droid version)
+          fi
+          CURRENT=$(node -p "require('./package.json').version")
+          echo "target=$TARGET"  | tee -a $GITHUB_OUTPUT
+          echo "current=$CURRENT" | tee -a $GITHUB_OUTPUT
+          if [ "$TARGET" = "$CURRENT" ]; then
+            echo "skip=true" >> $GITHUB_OUTPUT
+          else
+            echo "skip=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Up-to-date, exit
+        if: steps.target.outputs.skip == 'true'
+        run: echo "Already on droid ${{ steps.target.outputs.target }} — nothing to do."
+
+      - name: Sync version
+        if: steps.target.outputs.skip != 'true'
+        run: node scripts/sync-version.js "${{ steps.target.outputs.target }}"
+
+      - name: Install with the new droid pin
+        if: steps.target.outputs.skip != 'true'
+        run: npm install --no-audit --no-fund
+
+      - name: Smoke test the new droid binary
+        if: steps.target.outputs.skip != 'true'
+        run: node scripts/smoke.js "${{ steps.target.outputs.target }}"
+
+      - name: Commit, tag, push
+        if: steps.target.outputs.skip != 'true'
+        run: |
+          git config user.name 'droidnode-bot'
+          git config user.email 'droidnode-bot@users.noreply.github.com'
+          git add package.json package-lock.json
+          git commit -m "chore(release): track droid ${{ steps.target.outputs.target }}"
+          git tag "v${{ steps.target.outputs.target }}"
+          git push origin HEAD:main
+          git push origin "v${{ steps.target.outputs.target }}"
+
+      - name: Create GitHub release
+        if: steps.target.outputs.skip != 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create "v${{ steps.target.outputs.target }}" \
+            --title "v${{ steps.target.outputs.target }} — tracks droid@${{ steps.target.outputs.target }}" \
+            --notes "Auto-generated to track [droid@${{ steps.target.outputs.target }}](https://www.npmjs.com/package/droid/v/${{ steps.target.outputs.target }}). Patches verified by the CI smoke job. If a release fails the smoke step the bot will skip it and you will see a failed workflow run."
+
+      - name: Publish to npm
+        if: steps.target.outputs.skip != 'true'
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          if [ -z "$NODE_AUTH_TOKEN" ]; then
+            echo "::warning::NPM_TOKEN secret not set — skipping npm publish. GitHub release was tagged; users can install from git/tarball."
+            exit 0
+          fi
+          npm publish --access public --provenance

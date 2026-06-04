@@ -1,7 +1,7 @@
 {
   "name": "@thezzisu/droidnode",
   "version": "0.140.0",
-  "description": "Node-side launcher for Factory's droid CLI. Runs the droid JS bundle under a separately-installed Bun to sidestep the Bun 1.3.x standalone-init NULL allocator race that crashes `droid --resume` on long sessions.",
+  "description": "Run Factory's droid CLI on plain Node.js. Sidesteps the Bun 1.3.x standalone-init NULL-allocator race that crashes `droid --resume`, and Bun's long-session memory leaks.",
   "type": "module",
   "bin": {
     "droidnode": "bin/droidnode.js"
@@ -14,11 +14,12 @@
     "LICENSE"
   ],
   "dependencies": {
-    "droid": "0.140.0",
-    "bun": "^1.3.4"
+    "droid": "^0.140.0",
+    "koffi": "^2.10.0",
+    "ws": "^8.18.0"
   },
   "engines": {
-    "node": ">=20.0.0"
+    "node": ">=20.6.0"
   },
   "os": [
     "linux",
