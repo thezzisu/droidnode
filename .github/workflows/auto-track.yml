@@ -80,3 +80,14 @@ jobs:
           gh release create "v${{ steps.target.outputs.target }}" \
             --title "v${{ steps.target.outputs.target }} — tracks droid@${{ steps.target.outputs.target }}" \
             --notes "Auto-generated to track [droid@${{ steps.target.outputs.target }}](https://www.npmjs.com/package/droid/v/${{ steps.target.outputs.target }}). Patches verified by the CI smoke job. Publish to npm is handled by .github/workflows/publish.yml (OIDC Trusted Publisher)."
+
+      # The tag push above is made with GITHUB_TOKEN, and GitHub deliberately
+      # does NOT trigger other workflows from GITHUB_TOKEN-created events. So
+      # publish.yml's `on: push: tags` never fires for bot-pushed tags. Kick it
+      # off explicitly via workflow_dispatch — OIDC Trusted Publisher keys off
+      # the workflow filename, not the trigger, so this publishes identically.
+      - name: Trigger publish workflow
+        if: steps.target.outputs.skip != 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh workflow run publish.yml --ref "v${{ steps.target.outputs.target }}"
