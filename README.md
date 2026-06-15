@@ -94,7 +94,7 @@ Despite the patches being stable, the `dependencies.droid` range is pinned to `^
 
 ## Automation
 
-- `.github/workflows/ci.yml` — runs `scripts/smoke.js` (extract + `--version`) on Node 20 and 22, on every push and PR.
+- `.github/workflows/ci.yml` — runs `scripts/smoke.js` (extract + `--version`) on Node 24 and 26, on every push and PR.
 - `.github/workflows/auto-track.yml` — runs daily; if `npm view droid version` exceeds our `package.json` version, runs the smoke against the new droid, bumps both `version` and `dependencies.droid`, commits to `main`, tags `v<version>`, and creates a GitHub release.
 - `.github/workflows/publish.yml` — triggered on `v*.*.*` tag push (or manual dispatch). Publishes to npm via **Trusted Publisher (OIDC)** — no long-lived `NPM_TOKEN`, no static credentials. The workflow exchanges GitHub Actions' built-in OIDC token for an npm publish token at request time, and emits a [provenance attestation](https://docs.npmjs.com/generating-provenance-statements) so users can verify the published tarball was built from this exact commit.
 
