@@ -19,6 +19,13 @@ jobs:
         with:
           node-version: ${{ matrix.node }}
       - run: npm install --no-audit --no-fund
+      - name: Unit + package variant tests
+        run: node --test
+      - name: Verify both npm package layouts
+        run: |
+          node scripts/build-anonymous-package.js
+          npm pack --dry-run --json
+          npm pack --dry-run --json ./dist/droidnode
       - name: Extract + version smoke against pinned droid
         run: node scripts/smoke.js
       - name: Verify launcher resolves npm-installed droid

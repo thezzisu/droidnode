@@ -1,13 +1,13 @@
 name: Publish to npm
 
 # Publishes via npm's Trusted Publisher (OIDC) — no NPM_TOKEN needed.
-# Set up once at https://www.npmjs.com/package/@thezzisu/droidnode/access
+# Configure this publisher separately for @thezzisu/droidnode and droidnode
 # (or before first publish: https://www.npmjs.com/settings/<user>/trusted-publishers):
 #   Publisher: GitHub Actions
 #   Organization / repository: thezzisu / droidnode
 #   Workflow filename: publish.yml
 #   Environment: (leave blank, or "release" if you add one)
-# After that, every tag push hits npm with an OIDC-signed publish.
+# After that, every tag push publishes both names with OIDC provenance.
 
 on:
   push:
@@ -48,8 +48,14 @@ jobs:
       - name: Install deps
         run: npm install --no-audit --no-fund
 
+      - name: Unit + package variant tests
+        run: node --test
+
       - name: Smoke before publish
         run: node scripts/smoke.js
+
+      - name: Build anonymous package
+        run: node scripts/build-anonymous-package.js
 
       - name: Tag / package.json version match
         if: startsWith(github.ref, 'refs/tags/v')
@@ -61,9 +67,26 @@ jobs:
             exit 1
           fi
 
-      - name: npm publish (OIDC, with provenance)
+      - name: npm publish both names (OIDC, with provenance)
         if: ${{ !inputs.dry-run }}
-        run: npm publish --access public --provenance
+        run: |
+          publish_if_missing() {
+            DIR="$1"
+            NAME=$(node -p "require('./' + '$DIR'.replace(/^\.\//, '') + '/package.json').name")
+            VERSION=$(node -p "require('./' + '$DIR'.replace(/^\.\//, '') + '/package.json').version")
+            if OUTPUT=$(npm view "$NAME@$VERSION" version 2>&1); then
+              echo "$NAME@$VERSION is already published — skipping"
+              return
+            fi
+            if ! grep -q 'E404' <<<"$OUTPUT"; then
+              echo "$OUTPUT" >&2
+              return 1
+            fi
+            npm publish "$DIR" --access public --provenance
+          }
+
+          publish_if_missing ./dist/droidnode
+          publish_if_missing .
 
       - name: Ensure GitHub release exists
         if: ${{ !inputs.dry-run && startsWith(github.ref, 'refs/tags/v') }}
@@ -77,13 +100,14 @@ jobs:
             DROID_VER=$(node -p "require('./package.json').dependencies.droid.replace(/^[\^~]/,'')")
             gh release create "$TAG" \
               --title "$TAG — pinned to droid@$DROID_VER" \
-              --notes "Published from CI via npm Trusted Publisher OIDC. Provenance attestation: https://www.npmjs.com/package/@thezzisu/droidnode/v/${TAG#v}"
+              --notes "Published from CI via npm Trusted Publisher OIDC: [droidnode](https://www.npmjs.com/package/droidnode/v/${TAG#v}) and [@thezzisu/droidnode](https://www.npmjs.com/package/@thezzisu/droidnode/v/${TAG#v})."
           fi
 
       - name: Dry-run pack
         if: ${{ inputs.dry-run }}
         run: |
           npm pack --dry-run
+          npm pack --dry-run ./dist/droidnode
           echo "OIDC token claims:"
           curl -sSLf -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
                "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=npm" \

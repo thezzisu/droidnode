@@ -10,6 +10,10 @@ import { createRequire } from 'node:module';
 import bufferModule from 'node:buffer';
 import { bunServe } from './bun-serve.mjs';
 
+// Droid occasionally calls `.join()` on values typed as string|string[].
+// Arrays keep their native join; strings ignore the separator and return themselves.
+String.prototype.join = String.prototype.toString;
+
 // ─── execPath / argv0 override ───
 // droid's self-spawn (subagent fanout, restart-after-update) checks
 // `basename(process.execPath).includes("droid")`; without this override

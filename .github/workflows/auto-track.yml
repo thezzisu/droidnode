@@ -37,33 +37,33 @@ jobs:
           else
             TARGET=$(npm view droid version)
           fi
-          CURRENT=$(node -p "require('./package.json').version")
           echo "target=$TARGET"  | tee -a $GITHUB_OUTPUT
-          echo "current=$CURRENT" | tee -a $GITHUB_OUTPUT
-          if [ "$TARGET" = "$CURRENT" ]; then
-            echo "skip=true" >> $GITHUB_OUTPUT
+
+      - name: Sync version
+        id: sync
+        run: |
+          RESULT=$(node scripts/sync-version.js "${{ steps.target.outputs.target }}")
+          echo "$RESULT"
+          if [[ "$RESULT" == changed* ]]; then
+            echo "changed=true" >> $GITHUB_OUTPUT
           else
-            echo "skip=false" >> $GITHUB_OUTPUT
+            echo "changed=false" >> $GITHUB_OUTPUT
           fi
 
       - name: Up-to-date, exit
-        if: steps.target.outputs.skip == 'true'
-        run: echo "Already on droid ${{ steps.target.outputs.target }} — nothing to do."
-
-      - name: Sync version
-        if: steps.target.outputs.skip != 'true'
-        run: node scripts/sync-version.js "${{ steps.target.outputs.target }}"
+        if: steps.sync.outputs.changed != 'true'
+        run: echo "Current wrapper already covers droid ${{ steps.target.outputs.target }} — nothing to do."
 
       - name: Install with the new droid pin
-        if: steps.target.outputs.skip != 'true'
+        if: steps.sync.outputs.changed == 'true'
         run: npm install --no-audit --no-fund
 
       - name: Smoke test the new droid binary
-        if: steps.target.outputs.skip != 'true'
+        if: steps.sync.outputs.changed == 'true'
         run: node scripts/smoke.js "${{ steps.target.outputs.target }}"
 
       - name: Commit, tag, push
-        if: steps.target.outputs.skip != 'true'
+        if: steps.sync.outputs.changed == 'true'
         run: |
           git config user.name 'droidnode-bot'
           git config user.email 'droidnode-bot@users.noreply.github.com'
@@ -74,7 +74,7 @@ jobs:
           git push origin "v${{ steps.target.outputs.target }}"
 
       - name: Create GitHub release
-        if: steps.target.outputs.skip != 'true'
+        if: steps.sync.outputs.changed == 'true'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
@@ -88,7 +88,7 @@ jobs:
       # off explicitly via workflow_dispatch — OIDC Trusted Publisher keys off
       # the workflow filename, not the trigger, so this publishes identically.
       - name: Trigger publish workflow
-        if: steps.target.outputs.skip != 'true'
+        if: steps.sync.outputs.changed == 'true'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: gh workflow run publish.yml --ref "v${{ steps.target.outputs.target }}"

@@ -96,11 +96,11 @@ Despite the patches being stable, the `dependencies.droid` range is pinned to `^
 
 - `.github/workflows/ci.yml` — runs `scripts/smoke.js` (extract + `--version`) on Node 24 and 26, on every push and PR.
 - `.github/workflows/auto-track.yml` — runs daily; if `npm view droid version` exceeds our `package.json` version, runs the smoke against the new droid, bumps both `version` and `dependencies.droid`, commits to `main`, tags `v<version>`, and creates a GitHub release.
-- `.github/workflows/publish.yml` — triggered on `v*.*.*` tag push (or manual dispatch). Publishes to npm via **Trusted Publisher (OIDC)** — no long-lived `NPM_TOKEN`, no static credentials. The workflow exchanges GitHub Actions' built-in OIDC token for an npm publish token at request time, and emits a [provenance attestation](https://docs.npmjs.com/generating-provenance-statements) so users can verify the published tarball was built from this exact commit.
+- `.github/workflows/publish.yml` — triggered on `v*.*.*` tag push (or manual dispatch). Publishes both `@thezzisu/droidnode` and the anonymous `droidnode` package via **Trusted Publisher (OIDC)** — no long-lived `NPM_TOKEN`, no static credentials. The workflow exchanges GitHub Actions' built-in OIDC token for an npm publish token at request time, and emits a [provenance attestation](https://docs.npmjs.com/generating-provenance-statements) so users can verify the published tarball was built from this exact commit.
 
 ### One-time Trusted Publisher setup
 
-1. Sign in to npmjs.com as the publisher account (must have publish rights on `@thezzisu`).
+1. Sign in to npmjs.com as the publisher account (must have publish rights on both package names).
 2. Go to **Settings → Trusted Publishers**, click **Add Trusted Publisher**.
 3. Fill in:
    - Publisher: `GitHub Actions`
@@ -108,7 +108,7 @@ Despite the patches being stable, the `dependencies.droid` range is pinned to `^
    - Repository: `droidnode`
    - Workflow filename: `publish.yml`
    - Environment: *leave blank* (or pin to `release` if you create that environment for required reviewers)
-4. Save. From the next tag push, the publish workflow authenticates via OIDC — no secrets in the repo, no token rotation, and the published version page on npmjs.com shows a "Built and signed on GitHub Actions" badge linking back to the workflow run.
+4. Save, then repeat the Trusted Publisher setup for the other package name. From the next tag push, the publish workflow authenticates via OIDC — no secrets in the repo, no token rotation, and the published version pages on npmjs.com show a "Built and signed on GitHub Actions" badge linking back to the workflow run.
 
 The very first publish of a new package name can be done either by manually dispatching `publish.yml` once the trusted publisher is configured (npm now supports OIDC-based namespace claims), or by a single manual `npm publish` from a maintainer's machine to register the name, after which OIDC takes over.
 

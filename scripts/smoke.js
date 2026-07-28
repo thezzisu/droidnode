@@ -28,6 +28,10 @@ try {
       env: { ...process.env, XDG_CACHE_HOME: cacheBase },
     },
   );
+  if (result.error) {
+    console.error(`smoke: failed to launch wrapper: ${result.error.message}`);
+    process.exit(1);
+  }
   if (result.status !== 0) {
     console.error(`smoke: launcher exited with ${result.status}`);
     process.exit(1);
