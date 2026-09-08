@@ -48,6 +48,13 @@ test('anonymous package preserves runtime bytes and removes identity metadata', 
     );
     assert.match(readFileSync(join(output, 'README.md'), 'utf8'), /npm install -g droidnode/);
     assert.match(readFileSync(join(output, 'LICENSE'), 'utf8'), /droidnode contributors/);
+
+    // droid >= 0.213 spawns process.execPath (our wrapper) directly to start a
+    // session backend, so the launcher has to stay executable through the copy.
+    assert.ok(
+      statSync(join(output, 'bin', 'droidnode.js')).mode & 0o111,
+      'bin/droidnode.js must keep its executable bit in the anonymous package',
+    );
   } finally {
     rmSync(temp, { recursive: true, force: true });
   }

@@ -46,6 +46,27 @@ try {
     process.exit(1);
   }
   console.log(`smoke OK: droid ${out}`);
+
+  // `--version` exits before the daemon starts, so it passes even when the
+  // launcher can't be re-spawned. droid >= 0.213 executes process.execPath to
+  // start each session backend, so assert the wrapper is actually spawnable —
+  // otherwise the TUI fails every session with "permission denied".
+  const wrapper = join(PKG_ROOT, 'bin', 'droidnode.js');
+  const probe = spawnSync(wrapper, ['--version'], {
+    stdio: ['ignore', 'pipe', 'pipe'],
+    encoding: 'utf8',
+    env: { ...process.env, XDG_CACHE_HOME: cacheBase },
+  });
+  if (probe.error) {
+    console.error(`smoke: wrapper is not directly executable: ${probe.error.message}`);
+    console.error('       droid spawns process.execPath to start sessions; run `chmod +x bin/droidnode.js`.');
+    process.exit(1);
+  }
+  if (probe.status !== 0) {
+    console.error(`smoke: direct wrapper exec exited with ${probe.status}: ${probe.stderr?.trim()}`);
+    process.exit(1);
+  }
+  console.log('smoke OK: wrapper is directly executable');
 } finally {
   rmSync(cacheBase, { recursive: true, force: true });
 }

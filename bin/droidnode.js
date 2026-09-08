@@ -12,6 +12,7 @@
 // — see README.md. This launcher is MIT.
 
 import { spawn, spawnSync } from 'node:child_process';
+import { accessSync, chmodSync, constants as fsConstants, writeFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join, resolve } from 'node:path';
 import { findDroidBinary } from '../lib/locate.js';
@@ -60,9 +61,41 @@ if (!droid.path) {
 const cacheDir = ensureExtracted(droid.path, { quiet: !process.env.DROIDNODE_VERBOSE });
 const droidMjs = join(cacheDir, 'droid.node.mjs');
 
-const wrapperPath = process.env.DROIDNODE_WRAPPER_PATH
+// ─── Spawnable wrapper path ───
+// The bun-shim preload rewrites process.execPath to this wrapper so droid's
+// self-spawn checks (`basename(execPath).includes("droid")`) pass. Since droid
+// 0.213 the daemon *executes* that path directly (`daemon.initialize_session`
+// spawns execPath to start the session backend) instead of going through a
+// PATH lookup, so a non-executable path now fails the whole TUI with
+// "Failed to start Droid: permission denied".
+//
+// bin/droidnode.js ships with the executable bit set, but a path can still be
+// unspawnable — e.g. a checkout cloned with a umask that dropped +x, or an
+// invocation as `node path/to/droidnode.js` from a tarball. Fall back to a
+// tiny generated launcher in the cache dir, which we always chmod ourselves.
+function ensureSpawnableWrapper(candidate) {
+  try {
+    accessSync(candidate, fsConstants.X_OK);
+    return candidate;
+  } catch { /* fall through to generated shim */ }
+
+  const shimPath = join(cacheDir, 'droid');
+  const script = `#!/bin/sh\nexec ${JSON.stringify(process.execPath)} ${JSON.stringify(candidate)} "$@"\n`;
+  try {
+    writeFileSync(shimPath, script);
+    chmodSync(shimPath, 0o755);
+    return shimPath;
+  } catch {
+    // Cache dir unwritable — keep the original path; droid may still cope.
+    return candidate;
+  }
+}
+
+const wrapperPath = ensureSpawnableWrapper(
+  process.env.DROIDNODE_WRAPPER_PATH
   ?? process.argv[1]
-  ?? join(PKG_ROOT, 'bin', 'droidnode.js');
+  ?? join(PKG_ROOT, 'bin', 'droidnode.js'),
+);
 
 const env = {
   ...process.env,

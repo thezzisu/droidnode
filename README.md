@@ -67,8 +67,8 @@ Cache lives at `$XDG_CACHE_HOME/droidnode/<binary-fingerprint>/`. The key includ
 ## How it works
 
 1. Resolve `droid` via `require('droid/platform.js').getBinaryPathWithInfo()` — the same logic Factory's own shim uses, picking `@factory/cli-<platform>{,-baseline}` based on the host CPU's AVX2 support.
-2. Locate the `.bun` ELF section by scanning for the `/$bunfs/root/droid\0// @bun\n` opener. Files inside are packed sequentially as `<path>\0<content>`; we walk the list by looking for `\0/$bunfs/root/` boundaries.
-3. Extract every non-`droid` entry to `<cache>/embedded/<basename>` and chmod +x the natives (`rg`, `librust_pty-*.so`, `agent-browser`, install shell scripts).
+2. Locate the `.bun` ELF section and read the module table Bun writes at its end. The section is laid out as `<8-byte length header> <module data…> <32-byte Offsets> <16-byte trailer>`, where the trailer is the literal `\n---- Bun! ----\n`. The `Offsets` struct holds `byte_count` — which lets us walk back to the section start, so no ELF/Mach-O parsing is needed — and a pointer to the module table. Each 52-byte record starts with two `StringPointer{offset,length}` fields (module name, then module contents) as byte ranges into the section, every offset biased by that 8-byte header. The entry-point module is `index.js` (older droid builds: `droid`).
+3. Extract every non-entry-point module to `<cache>/embedded/<basename>` and chmod +x the natives (`rg`, `librust_pty-*.so`, `agent-browser`, install shell scripts).
 4. Apply the following patches to the JS bundle and write it as `<cache>/droid.node.mjs`:
    - Truncate at the last `//# debugId=<hex>\n` line. Bun appends raw Zstd sourcemap blobs past it that fail Node's JS parser on the embedded NULL bytes.
    - Replace every `/$bunfs/root/` literal with the absolute path to `<cache>/embedded/`.
@@ -78,7 +78,7 @@ Cache lives at `$XDG_CACHE_HOME/droidnode/<binary-fingerprint>/`. The key includ
    - `from"ws"` → absolute path to the `ws` package's entry (so the bundle's `import X from "ws"` resolves outside any `node_modules` tree).
    - `this.server=Bun.serve(` → `this.server=await Bun.serve(` ×2. Our Bun.serve polyfill is async; Bun's original is sync.
 5. Spawn `node --import bun-shim.mjs --enable-source-maps <cache>/droid.node.mjs <argv>`. The shim preload:
-   - Overrides `process.execPath` / `argv0` / `argv[0]` so droid's self-spawn (subagent fanout, restart-after-update) re-enters us via `basename(execPath).includes("droid")`.
+   - Overrides `process.execPath` / `argv0` / `argv[0]` so droid's self-spawn (subagent fanout, restart-after-update) re-enters us via `basename(execPath).includes("droid")`. Since droid 0.213 the daemon also *executes* that path directly to start each session backend, so the launcher must be executable — `bin/droidnode.js` ships with the `+x` bit, and we fall back to a generated `<cache>/droid` shell shim if the resolved path isn't spawnable.
    - Installs `globalThis.Bun` with subset of `spawn`/`spawnSync`/`file`/`which`/`gc`/`connect`/`serve`/`fileURLToPath`/`version`.
    - Implements `Bun.serve` over `node:http` + `ws` (the only thing `droid daemon` needs that Bun has and Node doesn't).
    - Routes `import.meta.require` through `createRequire(import.meta.url)`, intercepting `node-fetch` and `abort-controller` to the Node 18+ / 15+ globals so neither package needs to be installed.
@@ -88,7 +88,7 @@ Subsequent invocations hit the cache and skip extraction.
 
 ## Cross-version compatibility
 
-The patch set is stable across the droid versions we've tested (0.135.1 through 0.140.0 — every published version we could install at the time). The CI smoke job runs extraction + `--version` on every push; the `auto-track` workflow re-runs it daily against the latest droid release before bumping our pin.
+The patch set is stable across the droid versions we've tested (0.135.1 through 0.213.0). Two upstream changes needed launcher work: droid grew past the old `/$bunfs/root/` prefix scan (which could not know where each embedded file ended, so it appended stray padding), now replaced by a proper read of Bun's module table; and droid's daemon began spawning `process.execPath` directly to start session backends (0.213), which requires the launcher itself to be executable. The CI smoke job runs extraction + `--version` on every push; the `auto-track` workflow re-runs it daily against the latest droid release before bumping our pin.
 
 Despite the patches being stable, the `dependencies.droid` range is pinned to `^<latest-tested>` so a stale install never silently runs against an untested droid major. The bot opens a new tag/release whenever upstream droid moves.
 
