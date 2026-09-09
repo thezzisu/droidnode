@@ -1,9 +1,10 @@
-// Guards the .bun-section reader against the two standalone layouts droid has
-// shipped. Skipped when no droid binary is installed (e.g. a docs-only CI job).
+// Guards the .bun-section reader and the launcher's behaviour when it can't
+// read a bundle. Skipped when no droid binary is installed.
 
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { mkdtempSync, readFileSync, readdirSync, rmSync, statSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
+import { mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { findDroidBinary } from '../lib/locate.js';
@@ -44,3 +45,57 @@ function findEntry(dir, pattern) {
   assert.ok(match, `no embedded entry matching ${pattern}`);
   return match;
 }
+
+// A binary whose trailer we've corrupted stands in for "some future Bun writes
+// a layout we don't parse". Extraction must name itself rather than throwing
+// something opaque from deep in the offset arithmetic.
+function withCorruptedBinary(fn) {
+  const temp = mkdtempSync(join(tmpdir(), 'droidnode-corrupt-'));
+  try {
+    const copy = join(temp, 'droid');
+    const buf = readFileSync(droid.path);
+    const at = buf.lastIndexOf(Buffer.from('\n---- Bun! ----\n'));
+    assert.ok(at > 0, 'test fixture needs a locatable trailer');
+    buf.write('\n---- Nope! ---\n', at, 'latin1');
+    writeFileSync(copy, buf, { mode: 0o755 });
+    return fn(copy);
+  } finally {
+    rmSync(temp, { recursive: true, force: true });
+  }
+}
+
+test('an unreadable bundle fails with a diagnosable error', { skip }, () => {
+  withCorruptedBinary((copy) => {
+    const temp = mkdtempSync(join(tmpdir(), 'droidnode-corrupt-out-'));
+    try {
+      assert.throws(
+        () => extract(copy, join(temp, 'cache'), { quiet: true }),
+        /could not read the embedded bundle.*droid --version/s,
+      );
+    } finally {
+      rmSync(temp, { recursive: true, force: true });
+    }
+  });
+});
+
+test('the launcher falls back to the stock binary, and honours the opt-out', { skip }, () => {
+  withCorruptedBinary((copy) => {
+    const cache = mkdtempSync(join(tmpdir(), 'droidnode-fallback-'));
+    const wrapper = join(import.meta.dirname, '..', 'bin', 'droidnode.js');
+    const run = (extraEnv) => spawnSync(process.execPath, [wrapper, '--version'], {
+      encoding: 'utf8',
+      env: { ...process.env, DROID_BIN: copy, XDG_CACHE_HOME: cache, ...extraEnv },
+    });
+    try {
+      const fell = run({});
+      assert.match(fell.stderr, /falling back to the stock droid binary/);
+      assert.match(fell.stderr, /are NOT active/);
+
+      const refused = run({ DROIDNODE_NO_FALLBACK: '1' });
+      assert.equal(refused.status, 1, 'DROIDNODE_NO_FALLBACK must fail hard');
+      assert.doesNotMatch(refused.stderr, /falling back to the stock droid binary/);
+    } finally {
+      rmSync(cache, { recursive: true, force: true });
+    }
+  });
+});

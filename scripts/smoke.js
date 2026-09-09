@@ -48,9 +48,10 @@ try {
   console.log(`smoke OK: droid ${out}`);
 
   // `--version` exits before the daemon starts, so it passes even when the
-  // launcher can't be re-spawned. droid >= 0.213 executes process.execPath to
-  // start each session backend, so assert the wrapper is actually spawnable —
-  // otherwise the TUI fails every session with "permission denied".
+  // launcher can't be re-spawned. droid executes process.execPath to start each
+  // session backend, so assert the wrapper is actually spawnable — otherwise
+  // every interactive session fails with "permission denied" while this smoke
+  // test stays green (which is exactly how that shipped unnoticed).
   const wrapper = join(PKG_ROOT, 'bin', 'droidnode.js');
   const probe = spawnSync(wrapper, ['--version'], {
     stdio: ['ignore', 'pipe', 'pipe'],

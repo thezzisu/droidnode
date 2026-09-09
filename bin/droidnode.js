@@ -58,21 +58,45 @@ if (!droid.path) {
   );
 }
 
-const cacheDir = ensureExtracted(droid.path, { quiet: !process.env.DROIDNODE_VERBOSE });
+// ─── Extraction, with a fallback to stock droid ───
+// droidnode exists to run droid's bundle off Bun, but a launcher that can't
+// launch is worse than one that launches degraded. If Bun changes the
+// standalone layout again, hand off to the real binary and say so loudly rather
+// than leaving the user with no working droid until we ship a patch.
+// DROIDNODE_NO_FALLBACK=1 restores hard-fail for anyone who would rather know.
+let cacheDir;
+try {
+  cacheDir = ensureExtracted(droid.path, { quiet: !process.env.DROIDNODE_VERBOSE });
+} catch (err) {
+  if (process.env.DROIDNODE_NO_FALLBACK === '1') {
+    die(`${err.message}\n  (DROIDNODE_NO_FALLBACK=1 is set, so not falling back to the stock binary.)`);
+  }
+  process.stderr.write(
+    `droidnode: ${err.message}\n`
+    + `droidnode: falling back to the stock droid binary — the Bun --resume crash\n`
+    + `           workaround and the memory-leak mitigation are NOT active.\n`
+    + `           Set DROIDNODE_NO_FALLBACK=1 to fail instead of falling back.\n`,
+  );
+  const fallback = spawnSync(droid.path, args, { stdio: 'inherit', env: process.env });
+  if (fallback.error) die(`failed to exec stock droid: ${fallback.error.message}`);
+  if (fallback.signal) process.kill(process.pid, fallback.signal);
+  process.exit(fallback.status ?? 0);
+}
 const droidMjs = join(cacheDir, 'droid.node.mjs');
 
 // ─── Spawnable wrapper path ───
 // The bun-shim preload rewrites process.execPath to this wrapper so droid's
-// self-spawn checks (`basename(execPath).includes("droid")`) pass. Since droid
-// 0.213 the daemon *executes* that path directly (`daemon.initialize_session`
-// spawns execPath to start the session backend) instead of going through a
-// PATH lookup, so a non-executable path now fails the whole TUI with
-// "Failed to start Droid: permission denied".
+// self-spawn checks (`basename(execPath).includes("droid")`) pass. droid's
+// daemon then *executes* that path to start each session backend, so an
+// unspawnable path fails every session with "Failed to start Droid: permission
+// denied" while `--version` and `exec` still work.
 //
-// bin/droidnode.js ships with the executable bit set, but a path can still be
-// unspawnable — e.g. a checkout cloned with a umask that dropped +x, or an
-// invocation as `node path/to/droidnode.js` from a tarball. Fall back to a
-// tiny generated launcher in the cache dir, which we always chmod ourselves.
+// This bit us only outside npm: `npm install` chmods `bin` entries to 755, so
+// installed packages were always fine, but the file was mode 644 in git — so
+// running `node bin/droidnode.js` from a clone broke every interactive session.
+// The bit is now set in git too. Keep a fallback for paths we don't control
+// (tarball extracted with an odd umask, wrapper invoked via a copy): generate a
+// tiny launcher in the cache dir, which we chmod ourselves.
 function ensureSpawnableWrapper(candidate) {
   try {
     accessSync(candidate, fsConstants.X_OK);

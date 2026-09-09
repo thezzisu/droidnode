@@ -38,7 +38,7 @@ Both forms transparently install the `droid` npm package as a dependency, so a s
 ## Use
 
 ```bash
-droidnode --version           # tracks the underlying droid version
+droidnode --version           # the underlying droid's version
 droidnode --help              # full droid help (passthrough)
 droidnode --resume <id>       # the case this exists for
 droidnode --fork <id>         # forks
@@ -60,6 +60,7 @@ droidnode --reextract         # wipe the cache for the current droid binary and 
 |---|---|
 | `DROID_BIN` | Override droid binary location |
 | `DROIDNODE_VERBOSE` | Print extraction progress on first run |
+| `DROIDNODE_NO_FALLBACK` | Set to `1` to fail instead of falling back to the stock droid binary when the bundle can't be read |
 | `XDG_CACHE_HOME` | Cache base (defaults to `~/.cache`) |
 
 Cache lives at `$XDG_CACHE_HOME/droidnode/<binary-fingerprint>/`. The key includes the droid binary's size + head/tail hash + the shim directory path, so multiple droid versions and multiple `droidnode` installs coexist without collisions.
@@ -78,7 +79,7 @@ Cache lives at `$XDG_CACHE_HOME/droidnode/<binary-fingerprint>/`. The key includ
    - `from"ws"` → absolute path to the `ws` package's entry (so the bundle's `import X from "ws"` resolves outside any `node_modules` tree).
    - `this.server=Bun.serve(` → `this.server=await Bun.serve(` ×2. Our Bun.serve polyfill is async; Bun's original is sync.
 5. Spawn `node --import bun-shim.mjs --enable-source-maps <cache>/droid.node.mjs <argv>`. The shim preload:
-   - Overrides `process.execPath` / `argv0` / `argv[0]` so droid's self-spawn (subagent fanout, restart-after-update) re-enters us via `basename(execPath).includes("droid")`. Since droid 0.213 the daemon also *executes* that path directly to start each session backend, so the launcher must be executable — `bin/droidnode.js` ships with the `+x` bit, and we fall back to a generated `<cache>/droid` shell shim if the resolved path isn't spawnable.
+   - Overrides `process.execPath` / `argv0` / `argv[0]` so droid's self-spawn (subagent fanout, restart-after-update) re-enters us via `basename(execPath).includes("droid")`. droid's daemon also *executes* that path to start each session backend, so the launcher must be executable — `bin/droidnode.js` carries the `+x` bit, and we fall back to a generated `<cache>/droid` shell shim if the resolved path isn't spawnable.
    - Installs `globalThis.Bun` with subset of `spawn`/`spawnSync`/`file`/`which`/`gc`/`connect`/`serve`/`fileURLToPath`/`version`.
    - Implements `Bun.serve` over `node:http` + `ws` (the only thing `droid daemon` needs that Bun has and Node doesn't).
    - Routes `import.meta.require` through `createRequire(import.meta.url)`, intercepting `node-fetch` and `abort-controller` to the Node 18+ / 15+ globals so neither package needs to be installed.
@@ -88,15 +89,34 @@ Subsequent invocations hit the cache and skip extraction.
 
 ## Cross-version compatibility
 
-The patch set is stable across the droid versions we've tested (0.135.1 through 0.213.0). Two upstream changes needed launcher work: droid grew past the old `/$bunfs/root/` prefix scan (which could not know where each embedded file ended, so it appended stray padding), now replaced by a proper read of Bun's module table; and droid's daemon began spawning `process.execPath` directly to start session backends (0.213), which requires the launcher itself to be executable. The CI smoke job runs extraction + `--version` on every push; the `auto-track` workflow re-runs it daily against the latest droid release before bumping our pin.
+The extractor reads Bun's standalone *format*, not a droid version, so it is not version-gated. The same code handles every droid we've tested, 0.135.0 through 0.215.0 — verified by extracting and running each.
 
-Despite the patches being stable, the `dependencies.droid` range is pinned to `^<latest-tested>` so a stale install never silently runs against an untested droid major. The bot opens a new tag/release whenever upstream droid moves.
+One upstream change has needed launcher work so far: droid 0.204 grew past the original `/$bunfs/root/` prefix scan, which assumed each embedded file's content ran until the next path prefix. That assumption also meant the old scanner could never know where content actually ended, so it appended a stray NUL to every file (and 5051 bytes of padding to the last one); reading the module table fixed both the breakage and the corruption.
+
+If Bun changes the layout again, extraction fails with a named error rather than crashing somewhere deep in the patched bundle — and the launcher hands off to the stock droid binary so you are never left without a working `droid`. That fallback prints a warning, because it means the Bun workarounds this project exists for are inactive; `DROIDNODE_NO_FALLBACK=1` turns it back into a hard failure.
+
+## Versioning
+
+droidnode's version tracks **droidnode**, not droid. The extractor reads a format rather than a version, so a single droidnode release covers a wide range of droid releases — `dependencies.droid` is `>=0.204 <1`, and `npm install` gives you whatever droid is current.
+
+This used to work the other way: the version mirrored droid's exactly and a bot republished for every droid release. Those releases changed nothing but `package.json` — 17 of them in a row — and when droid 0.204 broke extraction, the pipeline stalled silently for two weeks while the tight pin held users on 0.203. Decoupling removes both failure modes: releases now happen when the launcher actually changes.
+
+Older droid builds (0.135.0+) also work if you pin one yourself; the floor is where we actively verify, not where the reader gives out.
 
 ## Automation
 
-- `.github/workflows/ci.yml` — runs `scripts/smoke.js` (extract + `--version`) on Node 24 and 26, on every push and PR.
-- `.github/workflows/auto-track.yml` — runs daily; if `npm view droid version` exceeds our `package.json` version, runs the smoke against the new droid, bumps both `version` and `dependencies.droid`, commits to `main`, tags `v<version>`, and creates a GitHub release.
+- `.github/workflows/ci.yml` — unit tests plus `scripts/smoke.js` (extract, `--version`, and a direct exec of the launcher) on Node 24 and 26, on every push and PR.
+- `.github/workflows/canary.yml` — runs daily against whatever `npm view droid version` reports. It does not bump or publish anything; on failure it opens (or comments on) a `canary`-labelled issue, and closes it once green again. This replaced the old auto-track bot, whose silent daily failures were how a two-week outage went unnoticed.
 - `.github/workflows/publish.yml` — triggered on `v*.*.*` tag push (or manual dispatch). Publishes both `@thezzisu/droidnode` and the anonymous `droidnode` package via **Trusted Publisher (OIDC)** — no long-lived `NPM_TOKEN`, no static credentials. The workflow exchanges GitHub Actions' built-in OIDC token for an npm publish token at request time, and emits a [provenance attestation](https://docs.npmjs.com/generating-provenance-statements) so users can verify the published tarball was built from this exact commit.
+
+### Cutting a release
+
+```bash
+npm version <patch|minor|major>   # bumps package.json + creates the vX.Y.Z tag
+git push origin main --follow-tags
+```
+
+The tag push triggers `publish.yml`. There is no bot release path any more, by design.
 
 ### One-time Trusted Publisher setup
 

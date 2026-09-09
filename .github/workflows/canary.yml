@@ -1,0 +1,94 @@
+name: droid compatibility canary
+
+# droidnode used to republish itself for every droid release, pinning `droid`
+# to the exact version it had just tested. That produced a stream of releases
+# whose only diff was package.json, and it meant one broken droid release
+# stalled the whole pipeline: when droid 0.204 changed Bun's standalone layout,
+# this job failed silently every day for two weeks while users stayed on 0.203.
+#
+# droidnode now floats its `droid` range and versions itself on its own
+# changes, so this job no longer bumps or publishes anything. It verifies the
+# launcher still works against the newest droid and files an issue when it
+# doesn't — the alarm, not the release train.
+
+on:
+  schedule:
+    # Daily at 03:17 UTC. Off-the-hour to spread npm registry load.
+    - cron: '17 3 * * *'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Check a specific droid version (defaults to npm latest)
+        required: false
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+
+      - name: Resolve target droid version
+        id: target
+        run: |
+          if [ -n "${{ inputs.version }}" ]; then
+            TARGET="${{ inputs.version }}"
+          else
+            TARGET=$(npm view droid version)
+          fi
+          echo "target=$TARGET" | tee -a $GITHUB_OUTPUT
+
+      - name: Install launcher deps
+        run: npm install --no-audit --no-fund
+
+      - name: Install the droid version under test
+        run: npm install --no-save --no-audit --no-fund "droid@${{ steps.target.outputs.target }}"
+
+      - name: Verify against droid ${{ steps.target.outputs.target }}
+        id: verify
+        run: |
+          node --test
+          node scripts/smoke.js "${{ steps.target.outputs.target }}"
+
+      - name: File or update the breakage issue
+        if: failure() && steps.verify.outcome == 'failure'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TARGET: ${{ steps.target.outputs.target }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          gh label create canary --description "Filed by the droid compatibility canary" --color B60205 2>/dev/null || true
+          TITLE="droidnode fails against droid $TARGET"
+          EXISTING=$(gh issue list --state open --label canary --search "in:title $TITLE" --json number --jq '.[0].number // empty')
+          if [ -n "$EXISTING" ]; then
+            gh issue comment "$EXISTING" --body "Still failing as of $RUN_URL"
+            exit 0
+          fi
+          {
+            printf 'The daily compatibility canary could not run droidnode against\n'
+            printf '[droid@%s](https://www.npmjs.com/package/droid/v/%s).\n\n' "$TARGET" "$TARGET"
+            printf 'Run log: %s\n\n' "$RUN_URL"
+            printf 'Users are not hard-broken: an unreadable bundle makes the launcher\n'
+            printf 'fall back to the stock droid binary with a warning\n'
+            printf '(`DROIDNODE_NO_FALLBACK=1` opts out), so the Bun workarounds are\n'
+            printf 'inactive until this is fixed.\n\n'
+            printf '<sub>Filed automatically by `.github/workflows/canary.yml`.</sub>\n'
+          } > "$RUNNER_TEMP/issue-body.md"
+          gh issue create --title "$TITLE" --label canary --body-file "$RUNNER_TEMP/issue-body.md"
+
+      - name: Close a stale breakage issue
+        if: success()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TARGET: ${{ steps.target.outputs.target }}
+        run: |
+          for N in $(gh issue list --state open --label canary --json number --jq '.[].number' 2>/dev/null); do
+            gh issue close "$N" --comment "Canary is green against droid $TARGET." || true
+          done
